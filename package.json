@@ -1,7 +1,24 @@
 {
   "name": "hallowallet",
   "version": "1.0.0",
-  "private": true,
+  "description": "Your smart, spooky money assistant. Track expenses with voice commands, get AI-powered financial advice, and reach your savings goals.",
+  "license": "MIT",
+  "author": "HalloWallet Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/hallowallet.git"
+  },
+  "keywords": [
+    "finance",
+    "expense-tracker",
+    "budget",
+    "voice-recognition",
+    "ai-assistant",
+    "nextjs",
+    "typescript",
+    "personal-finance"
+  ],
+  "private": false,
   "scripts": {
     "dev": "node node_modules/next/dist/bin/next dev",
     "build": "node node_modules/next/dist/bin/next build",
@@ -29,7 +46,7 @@
     "@types/react": "^18.3.8",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
-    "eslint": "^9.11.0",
+    "eslint": "^8.57.0",
     "eslint-config-next": "14.2.4",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.10",
