@@ -18,21 +18,28 @@ export default function GoalsWidget() {
   const [loading, setLoading] = useState(true);
 
   async function load() {
-    console.log("[GoalsWidget] Loading goals...");
-    // Get current month from URL
-    const url = new URL(window.location.href);
-    const month = url.searchParams.get("month") || new Date().toISOString().slice(0, 7);
-    
-    // Fetch goals for the selected month (yearly goals will show for all months in that year)
-    const res = await fetch(`/api/goals?month=${month}`);
-    if (res.ok) {
-      const data = await res.json();
-      console.log("[GoalsWidget] Loaded goals for", month, ":", data);
-      setGoals(data);
-    } else {
-      console.error("[GoalsWidget] Failed to load goals:", res.status);
+    try {
+      console.log("[GoalsWidget] Loading goals...");
+      // Get current month from URL
+      const url = new URL(window.location.href);
+      const month = url.searchParams.get("month") || new Date().toISOString().slice(0, 7);
+      
+      // Fetch goals for the selected month (yearly goals will show for all months in that year)
+      const res = await fetch(`/api/goals?month=${month}`);
+      if (res.ok) {
+        const data = await res.json();
+        console.log("[GoalsWidget] Loaded goals for", month, ":", data);
+        setGoals(data);
+      } else {
+        console.error("[GoalsWidget] Failed to load goals:", res.status);
+      }
+    } catch (error) {
+      console.error("[GoalsWidget] Error loading goals:", error);
+      // Don't crash the component, just show empty state
+      setGoals([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
   useEffect(() => {

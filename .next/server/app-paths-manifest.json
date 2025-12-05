@@ -1,12 +1,10 @@
 {
-  "/api/goals/route": "app/api/goals/route.js",
+  "/_not-found/page": "app/_not-found/page.js",
   "/api/expenses/route": "app/api/expenses/route.js",
-  "/api/subscriptions/route": "app/api/subscriptions/route.js",
-  "/api/spending-watch/route": "app/api/spending-watch/route.js",
-  "/api/financial-profile/route": "app/api/financial-profile/route.js",
+  "/api/goals/route": "app/api/goals/route.js",
+  "/page": "app/page.js",
+  "/(dashboard)/transactions/page": "app/(dashboard)/transactions/page.js",
+  "/(dashboard)/help/page": "app/(dashboard)/help/page.js",
   "/(dashboard)/goals/page": "app/(dashboard)/goals/page.js",
-  "/(dashboard)/dashboard/page": "app/(dashboard)/dashboard/page.js",
-  "/(dashboard)/insights/page": "app/(dashboard)/insights/page.js",
-  "/(dashboard)/settings/page": "app/(dashboard)/settings/page.js",
-  "/(dashboard)/advisor/page": "app/(dashboard)/advisor/page.js"
+  "/(dashboard)/insights/page": "app/(dashboard)/insights/page.js"
 }

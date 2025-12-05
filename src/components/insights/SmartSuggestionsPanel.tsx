@@ -47,7 +47,7 @@ export default function SmartSuggestionsPanel() {
           return acc;
         }, {});
 
-        const topCategory = Object.entries(categorySpending).sort((a: any, b: any) => b[1] - a[1])[0];
+        const topCategory = Object.entries(categorySpending).sort((a: any, b: any) => b[1] - a[1])[0] as [string, number] | undefined;
         if (topCategory && topCategory[1] > 500) {
           newSuggestions.push({
             id: "top-spending",

@@ -69,7 +69,7 @@ export const db = {
   updateUserPassword(userId: string, newHashedPassword: string) {
     const user = users.find(u => u.id === userId);
     if (!user) return false;
-    user.password = newHashedPassword;
+    user.passwordHash = newHashedPassword;
     console.log("[DB] Password updated for user:", user.email);
     saveData();
     return true;

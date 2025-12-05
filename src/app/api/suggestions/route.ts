@@ -485,11 +485,12 @@ export async function POST(req: NextRequest) {
     
     if (!dateToUse) {
       // Try month + day + year format: "nov 1, 2025", "november 1 2025", "sept 23,2025" (with or without space after comma)
-      const monthDayYearMatch = query.match(/\b(?:on\s+)?([a-záéíóúüñ]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?\b/i);
+      // Look for "on <month> <day>, <year>" pattern
+      const monthDayYearMatch = query.match(/(?:on\s+)?([a-záéíóúüñ]{3,})\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})\b/i);
       if (monthDayYearMatch) {
         const monthName = monthDayYearMatch[1];
         const day = parseInt(monthDayYearMatch[2], 10);
-        const year = monthDayYearMatch[3] ? parseInt(monthDayYearMatch[3], 10) : (selectedMonth ? parseInt(selectedMonth.slice(0,4), 10) : new Date().getFullYear());
+        const year = parseInt(monthDayYearMatch[3], 10);
         const monthIndex = monthNameToIndex(monthName);
         console.log(`[Expense] Matched: "${monthDayYearMatch[0]}", month="${monthName}", monthIndex=${monthIndex}, day=${day}, year=${year}`);
         if (monthIndex !== null) {
