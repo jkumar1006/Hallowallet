@@ -1,0 +1,692 @@
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import jwt from "jsonwebtoken";
+import fs from "fs/promises";
+import path from "path";
+
+const DB_PATH = path.join(process.cwd(), "data", "db.json");
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+const SESSION_COOKIE = "hallowallet_token";
+
+async function getDb() {
+  try {
+    const data = await fs.readFile(DB_PATH, "utf-8");
+    return JSON.parse(data);
+  } catch {
+    return { users: [], expenses: [], goals: [], financialProfiles: [] };
+  }
+}
+
+// Production-ready alternative suggestions based on item categories
+function getAlternativeSuggestions(itemName: string, itemPrice: number) {
+  const lowerName = itemName.toLowerCase();
+  
+  // Vehicles - Use Google search for cars, bikes, etc.
+  if (lowerName.includes("car") || lowerName.includes("vehicle") || lowerName.includes("auto") || 
+      lowerName.includes("truck") || lowerName.includes("suv") || lowerName.includes("motorcycle") || 
+      lowerName.includes("bike") || lowerName.includes("scooter")) {
+    const searchTerm = encodeURIComponent(itemName);
+    const maxPrice = Math.floor(itemPrice * 0.8);
+    return [
+      {
+        name: `Used ${itemName} Under $${maxPrice}`,
+        price: itemPrice * 0.7,
+        link: `https://www.google.com/search?q=used+${searchTerm}+under+${maxPrice}`,
+        retailers: [
+          { name: "Google Search", link: `https://www.google.com/search?q=used+${searchTerm}+under+${maxPrice}` },
+          { name: "CarGurus", link: `https://www.cargurus.com/Cars/inventorylisting/viewDetailsFilterViewInventoryListing.action?maxPrice=${maxPrice}` },
+          { name: "Autotrader", link: `https://www.autotrader.com/cars-for-sale/all-cars?maxPrice=${maxPrice}` }
+        ]
+      },
+      {
+        name: `Certified Pre-Owned ${itemName}`,
+        price: itemPrice * 0.8,
+        link: `https://www.google.com/search?q=certified+pre+owned+${searchTerm}`,
+        retailers: [
+          { name: "Google Search", link: `https://www.google.com/search?q=certified+pre+owned+${searchTerm}` },
+          { name: "CarMax", link: `https://www.carmax.com/cars` }
+        ]
+      },
+      {
+        name: `Budget ${itemName} Options`,
+        price: itemPrice * 0.6,
+        link: `https://www.google.com/search?q=affordable+${searchTerm}+alternatives`,
+        retailers: [
+          { name: "Google Search", link: `https://www.google.com/search?q=affordable+${searchTerm}+alternatives` }
+        ]
+      }
+    ];
+  }
+  
+  // Housing - Zillow links for affordable options
+  if (lowerName.includes("house") || lowerName.includes("home") || lowerName.includes("apartment") || lowerName.includes("condo")) {
+    const maxPrice = Math.floor(itemPrice * 0.8);
+    return [
+      {
+        name: "Affordable Homes Under $" + maxPrice,
+        price: itemPrice * 0.7,
+        link: `https://www.zillow.com/homes/for_sale/?searchQueryState=%7B%22price%22%3A%7B%22max%22%3A${maxPrice}%7D%7D`,
+        retailers: [
+          { name: "Zillow", link: `https://www.zillow.com/homes/for_sale/?searchQueryState=%7B%22price%22%3A%7B%22max%22%3A${maxPrice}%7D%7D` },
+          { name: "Realtor.com", link: `https://www.realtor.com/realestateandhomes-search` },
+          { name: "Redfin", link: `https://www.redfin.com/` }
+        ]
+      },
+      {
+        name: "Condos & Townhomes",
+        price: itemPrice * 0.6,
+        link: `https://www.zillow.com/condos/`,
+        retailers: [
+          { name: "Zillow", link: `https://www.zillow.com/condos/` },
+          { name: "Realtor.com", link: `https://www.realtor.com/realestateandhomes-search` }
+        ]
+      },
+      {
+        name: "Apartments for Rent",
+        price: itemPrice * 0.3,
+        link: `https://www.zillow.com/homes/for_rent/`,
+        retailers: [
+          { name: "Zillow", link: `https://www.zillow.com/homes/for_rent/` },
+          { name: "Apartments.com", link: `https://www.apartments.com/` }
+        ]
+      }
+    ];
+  }
+  
+  // Electronics
+  if (lowerName.includes("iphone") || lowerName.includes("phone")) {
+    return [
+      {
+        name: "Samsung Galaxy A54 5G",
+        price: itemPrice * 0.6,
+        link: "https://www.amazon.com/s?k=Samsung+Galaxy+A54",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Samsung+Galaxy+A54" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Samsung+Galaxy+A54" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Samsung+Galaxy+A54" }
+        ]
+      },
+      {
+        name: "Google Pixel 7a",
+        price: itemPrice * 0.5,
+        link: "https://www.amazon.com/s?k=Google+Pixel+7a",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Google+Pixel+7a" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Google+Pixel+7a" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Google+Pixel+7a" }
+        ]
+      },
+      {
+        name: "OnePlus Nord N30",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=OnePlus+Nord+N30",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=OnePlus+Nord+N30" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=OnePlus+Nord+N30" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=OnePlus+Nord+N30" }
+        ]
+      }
+    ];
+  }
+  
+  if (lowerName.includes("laptop") || lowerName.includes("macbook")) {
+    return [
+      {
+        name: "Lenovo IdeaPad 3",
+        price: itemPrice * 0.4,
+        link: "https://www.amazon.com/s?k=Lenovo+IdeaPad+3",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Lenovo+IdeaPad+3" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Lenovo+IdeaPad+3" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Lenovo+IdeaPad+3" }
+        ]
+      },
+      {
+        name: "HP Pavilion 15",
+        price: itemPrice * 0.5,
+        link: "https://www.amazon.com/s?k=HP+Pavilion+15",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=HP+Pavilion+15" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=HP+Pavilion+15" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=HP+Pavilion+15" }
+        ]
+      },
+      {
+        name: "Acer Aspire 5",
+        price: itemPrice * 0.35,
+        link: "https://www.amazon.com/s?k=Acer+Aspire+5",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Acer+Aspire+5" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Acer+Aspire+5" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Acer+Aspire+5" }
+        ]
+      }
+    ];
+  }
+
+  if (lowerName.includes("tablet") || lowerName.includes("ipad")) {
+    return [
+      {
+        name: "Samsung Galaxy Tab A8",
+        price: itemPrice * 0.4,
+        link: "https://www.amazon.com/s?k=Samsung+Galaxy+Tab+A8",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Samsung+Galaxy+Tab+A8" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Samsung+Galaxy+Tab+A8" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Samsung+Galaxy+Tab+A8" }
+        ]
+      },
+      {
+        name: "Amazon Fire HD 10",
+        price: itemPrice * 0.2,
+        link: "https://www.amazon.com/s?k=Amazon+Fire+HD+10",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Amazon+Fire+HD+10" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Amazon+Fire+HD+10" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Amazon+Fire+HD+10" }
+        ]
+      },
+      {
+        name: "Lenovo Tab M10",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=Lenovo+Tab+M10",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Lenovo+Tab+M10" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Lenovo+Tab+M10" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Lenovo+Tab+M10" }
+        ]
+      }
+    ];
+  }
+
+  if (lowerName.includes("watch") || lowerName.includes("smartwatch")) {
+    return [
+      {
+        name: "Amazfit GTS 4",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=Amazfit+GTS+4",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Amazfit+GTS+4" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Amazfit+GTS+4" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Amazfit+GTS+4" }
+        ]
+      },
+      {
+        name: "Fitbit Versa 4",
+        price: itemPrice * 0.5,
+        link: "https://www.amazon.com/s?k=Fitbit+Versa+4",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Fitbit+Versa+4" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Fitbit+Versa+4" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Fitbit+Versa+4" }
+        ]
+      },
+      {
+        name: "Samsung Galaxy Watch 5",
+        price: itemPrice * 0.6,
+        link: "https://www.amazon.com/s?k=Samsung+Galaxy+Watch+5",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Samsung+Galaxy+Watch+5" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Samsung+Galaxy+Watch+5" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Samsung+Galaxy+Watch+5" }
+        ]
+      }
+    ];
+  }
+
+  if (lowerName.includes("headphone") || lowerName.includes("airpod") || lowerName.includes("earbud")) {
+    return [
+      {
+        name: "Anker Soundcore Life Q30",
+        price: itemPrice * 0.2,
+        link: "https://www.amazon.com/s?k=Anker+Soundcore+Life+Q30",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Anker+Soundcore+Life+Q30" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Anker+Soundcore+Life+Q30" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Anker+Soundcore+Life+Q30" }
+        ]
+      },
+      {
+        name: "JBL Tune 760NC",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=JBL+Tune+760NC",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=JBL+Tune+760NC" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=JBL+Tune+760NC" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=JBL+Tune+760NC" }
+        ]
+      },
+      {
+        name: "Sony WH-CH720N",
+        price: itemPrice * 0.4,
+        link: "https://www.amazon.com/s?k=Sony+WH-CH720N",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Sony+WH-CH720N" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Sony+WH-CH720N" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Sony+WH-CH720N" }
+        ]
+      }
+    ];
+  }
+
+  // Clothing & Fashion
+  if (lowerName.includes("shoe") || lowerName.includes("sneaker")) {
+    return [
+      {
+        name: "Adidas Cloudfoam",
+        price: itemPrice * 0.4,
+        link: "https://www.amazon.com/s?k=Adidas+Cloudfoam",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Adidas+Cloudfoam" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Adidas+Cloudfoam" }
+        ]
+      },
+      {
+        name: "New Balance 520",
+        price: itemPrice * 0.5,
+        link: "https://www.amazon.com/s?k=New+Balance+520",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=New+Balance+520" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=New+Balance+520" }
+        ]
+      },
+      {
+        name: "Puma Smash",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=Puma+Smash",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Puma+Smash" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Puma+Smash" }
+        ]
+      }
+    ];
+  }
+
+  if (lowerName.includes("jacket") || lowerName.includes("coat")) {
+    return [
+      {
+        name: "Columbia Fleece Jacket",
+        price: itemPrice * 0.5,
+        link: "https://www.amazon.com/s?k=Columbia+Fleece+Jacket",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Columbia+Fleece+Jacket" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Columbia+Fleece+Jacket" }
+        ]
+      },
+      {
+        name: "The North Face Windbreaker",
+        price: itemPrice * 0.6,
+        link: "https://www.amazon.com/s?k=North+Face+Windbreaker",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=North+Face+Windbreaker" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=North+Face+Windbreaker" }
+        ]
+      },
+      {
+        name: "Hanes ComfortBlend",
+        price: itemPrice * 0.2,
+        link: "https://www.amazon.com/s?k=Hanes+ComfortBlend+Jacket",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Hanes+ComfortBlend+Jacket" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Hanes+ComfortBlend+Jacket" }
+        ]
+      }
+    ];
+  }
+
+  // Home & Kitchen
+  if (lowerName.includes("coffee") || lowerName.includes("espresso")) {
+    return [
+      {
+        name: "Mr. Coffee 12-Cup",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=Mr+Coffee+12+Cup",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Mr+Coffee+12+Cup" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Mr+Coffee+12+Cup" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Mr+Coffee+12+Cup" }
+        ]
+      },
+      {
+        name: "Hamilton Beach FlexBrew",
+        price: itemPrice * 0.4,
+        link: "https://www.amazon.com/s?k=Hamilton+Beach+FlexBrew",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Hamilton+Beach+FlexBrew" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Hamilton+Beach+FlexBrew" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Hamilton+Beach+FlexBrew" }
+        ]
+      },
+      {
+        name: "Black+Decker 5-Cup",
+        price: itemPrice * 0.2,
+        link: "https://www.amazon.com/s?k=Black+Decker+5+Cup",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Black+Decker+5+Cup" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Black+Decker+5+Cup" }
+        ]
+      }
+    ];
+  }
+
+  if (lowerName.includes("vacuum") || lowerName.includes("cleaner")) {
+    return [
+      {
+        name: "Bissell CleanView",
+        price: itemPrice * 0.3,
+        link: "https://www.amazon.com/s?k=Bissell+CleanView",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Bissell+CleanView" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Bissell+CleanView" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Bissell+CleanView" }
+        ]
+      },
+      {
+        name: "Eureka PowerSpeed",
+        price: itemPrice * 0.25,
+        link: "https://www.amazon.com/s?k=Eureka+PowerSpeed",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Eureka+PowerSpeed" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Eureka+PowerSpeed" }
+        ]
+      },
+      {
+        name: "Shark Navigator",
+        price: itemPrice * 0.5,
+        link: "https://www.amazon.com/s?k=Shark+Navigator",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Shark+Navigator" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Shark+Navigator" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Shark+Navigator" }
+        ]
+      }
+    ];
+  }
+
+  // Gaming
+  if (lowerName.includes("playstation") || lowerName.includes("ps5") || lowerName.includes("xbox")) {
+    return [
+      {
+        name: "Nintendo Switch Lite",
+        price: itemPrice * 0.4,
+        link: "https://www.amazon.com/s?k=Nintendo+Switch+Lite",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Nintendo+Switch+Lite" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Nintendo+Switch+Lite" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Nintendo+Switch+Lite" }
+        ]
+      },
+      {
+        name: "Xbox Series S",
+        price: itemPrice * 0.6,
+        link: "https://www.amazon.com/s?k=Xbox+Series+S",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Xbox+Series+S" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Xbox+Series+S" },
+          { name: "Walmart", link: "https://www.walmart.com/search?q=Xbox+Series+S" }
+        ]
+      },
+      {
+        name: "Steam Deck (Refurbished)",
+        price: itemPrice * 0.7,
+        link: "https://www.amazon.com/s?k=Steam+Deck+Refurbished",
+        retailers: [
+          { name: "Amazon", link: "https://www.amazon.com/s?k=Steam+Deck+Refurbished" },
+          { name: "Best Buy", link: "https://www.bestbuy.com/site/searchpage.jsp?st=Steam+Deck+Refurbished" }
+        ]
+      }
+    ];
+  }
+
+  // Generic alternatives for unknown items
+  const searchTerm = encodeURIComponent(itemName);
+  return [
+    {
+      name: `Budget ${itemName}`,
+      price: itemPrice * 0.5,
+      link: `https://www.amazon.com/s?k=${searchTerm}+budget`,
+      retailers: [
+        { name: "Amazon", link: `https://www.amazon.com/s?k=${searchTerm}+budget` },
+        { name: "Best Buy", link: `https://www.bestbuy.com/site/searchpage.jsp?st=${searchTerm}` },
+        { name: "Walmart", link: `https://www.walmart.com/search?q=${searchTerm}` }
+      ]
+    },
+    {
+      name: `${itemName} (Refurbished)`,
+      price: itemPrice * 0.6,
+      link: `https://www.amazon.com/s?k=${searchTerm}+refurbished`,
+      retailers: [
+        { name: "Amazon", link: `https://www.amazon.com/s?k=${searchTerm}+refurbished` },
+        { name: "Best Buy", link: `https://www.bestbuy.com/site/searchpage.jsp?st=${searchTerm}+refurbished` },
+        { name: "Walmart", link: `https://www.walmart.com/search?q=${searchTerm}+refurbished` }
+      ]
+    },
+    {
+      name: `Generic ${itemName}`,
+      price: itemPrice * 0.3,
+      link: `https://www.amazon.com/s?k=${searchTerm}+generic`,
+      retailers: [
+        { name: "Amazon", link: `https://www.amazon.com/s?k=${searchTerm}` },
+        { name: "Best Buy", link: `https://www.bestbuy.com/site/searchpage.jsp?st=${searchTerm}` },
+        { name: "Walmart", link: `https://www.walmart.com/search?q=${searchTerm}` }
+      ]
+    }
+  ];
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const token = cookieStore.get(SESSION_COOKIE)?.value;
+
+    if (!token) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string };
+    const userId = payload.sub;
+    
+    const body = await req.json();
+    const { items, timePeriod = "monthly" } = body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+      const db = await getDb();
+    const profile = db.financialProfiles?.find((p: any) => p.userId === userId);
+
+    if (!profile) {
+      return NextResponse.json({ error: "Financial profile not set up" }, { status: 400 });
+    }
+
+    const userExpenses = db.expenses?.filter((e: any) => e.userId === userId) || [];
+    const userGoals = db.goals?.filter((g: any) => g.userId === userId && g.period === "monthly") || [];
+  
+    // Calculate current month spending
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+    const currentMonthSpending = userExpenses
+      .filter((e: any) => {
+        const expDate = new Date(e.date);
+        return expDate.getMonth() === currentMonth && expDate.getFullYear() === currentYear;
+      })
+      .reduce((sum: number, e: any) => sum + e.amount, 0);
+
+    // Calculate total monthly goals
+    const totalMonthlyGoals = userGoals.reduce((sum: number, g: any) => sum + g.limit, 0);
+
+    // Calculate base metrics
+    const monthlySavingsTarget = profile.yearlySavingsGoal / 12;
+    const disposableIncome = profile.monthlyIncome - monthlySavingsTarget - profile.expectedMonthlyExpenses;
+    const remainingBudget = disposableIncome - currentMonthSpending;
+    const yearlyDisposableIncome = disposableIncome * 12;
+    
+    // Analyze each item
+    const itemAnalyses = items.map((item: any) => {
+      const itemPrice = item.price;
+      const itemName = item.name;
+      
+      // Monthly analysis
+      const afterPurchaseBalance = remainingBudget - itemPrice;
+      
+      // Yearly analysis
+      const yearlyDisposableAfterPurchase = yearlyDisposableIncome - itemPrice;
+      const canAffordFromYearlyDisposable = itemPrice <= yearlyDisposableIncome;
+      const amountCutFromSavings = canAffordFromYearlyDisposable ? 0 : itemPrice - yearlyDisposableIncome;
+      
+      // Score calculation (0-100, higher is better)
+      let score = 100;
+      
+      if (timePeriod === "monthly") {
+        // Monthly scoring
+        if (afterPurchaseBalance > disposableIncome * 0.2) {
+          score = 100; // Excellent
+        } else if (afterPurchaseBalance > 0) {
+          score = 70; // Good but tight
+        } else if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.3) {
+          score = 50; // Wait recommended
+        } else if (canAffordFromYearlyDisposable) {
+          score = 30; // Reconsider
+        } else {
+          score = 10; // Not recommended
+        }
+      } else {
+        // Yearly scoring
+        if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.5) {
+          score = 100; // Excellent
+        } else if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.3) {
+          score = 70; // Good
+        } else if (canAffordFromYearlyDisposable) {
+          score = 40; // Tight
+        } else {
+          score = 10; // Cuts into savings
+        }
+      }
+      
+      // Determine recommendation
+      let recommendation: "buy" | "wait" | "reconsider";
+      let reason: string;
+      
+      if (timePeriod === "monthly") {
+        if (afterPurchaseBalance > disposableIncome * 0.2) {
+          recommendation = "buy";
+          reason = `✅ Monthly: Comfortable. $${afterPurchaseBalance.toFixed(2)} left this month.`;
+        } else if (afterPurchaseBalance > 0) {
+          recommendation = "buy";
+          reason = `🟡 Monthly: Tight. $${afterPurchaseBalance.toFixed(2)} left this month.`;
+        } else if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.3) {
+          recommendation = "wait";
+          reason = `❌ Monthly: Exceeds budget by $${Math.abs(afterPurchaseBalance).toFixed(2)}.\n💡 Wait or use yearly budget.`;
+        } else if (canAffordFromYearlyDisposable) {
+          recommendation = "reconsider";
+          reason = `❌ Monthly: Exceeds budget by $${Math.abs(afterPurchaseBalance).toFixed(2)}.\n⚠️ Uses most yearly disposable.`;
+        } else {
+          recommendation = "reconsider";
+          reason = `❌ Monthly: Exceeds budget by $${Math.abs(afterPurchaseBalance).toFixed(2)}.\n🚫 Cuts $${amountCutFromSavings.toFixed(2)} from savings.`;
+        }
+      } else {
+        // Yearly analysis
+        if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.5) {
+          recommendation = "buy";
+          reason = `✅ Yearly: Affordable. $${yearlyDisposableAfterPurchase.toFixed(2)} left for year.`;
+        } else if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.3) {
+          recommendation = "buy";
+          reason = `🟡 Yearly: Affordable but uses significant budget. $${yearlyDisposableAfterPurchase.toFixed(2)} left.`;
+        } else if (canAffordFromYearlyDisposable) {
+          recommendation = "reconsider";
+          reason = `⚠️ Yearly: Uses most disposable income. Only $${yearlyDisposableAfterPurchase.toFixed(2)} left.`;
+        } else {
+          recommendation = "reconsider";
+          reason = `🚫 Yearly: Exceeds disposable by $${amountCutFromSavings.toFixed(2)}. Cuts into savings.`;
+        }
+      }
+      
+      return {
+        itemName,
+        itemPrice,
+        score,
+        recommendation,
+        reason,
+        afterPurchaseBalance,
+        yearlyDisposableAfterPurchase,
+        alternativeSuggestions: getAlternativeSuggestions(itemName, itemPrice).slice(0, 3)
+      };
+    });
+    
+    // Sort by score (best to worst)
+    itemAnalyses.sort((a: any, b: any) => b.score - a.score);
+    
+    // Determine overall recommendation
+    const bestItem = itemAnalyses[0];
+    const impactOnSavings = bestItem.afterPurchaseBalance;
+    const afterPurchaseBalance = bestItem.afterPurchaseBalance;
+
+  // Decision logic
+  let recommendation: "buy" | "wait" | "reconsider";
+  let reason: string;
+  let alternativeSuggestions: any[] = [];
+
+  // Can afford this month comfortably
+  if (afterPurchaseBalance > disposableIncome * 0.2) {
+    recommendation = "buy";
+    const monthlyMsg = `✅ Monthly: You can afford this! $${afterPurchaseBalance.toFixed(2)} left this month.`;
+    const yearlyMsg = `✅ Yearly: Fits within yearly disposable ($${yearlyDisposableIncome.toFixed(2)}). $${yearlyDisposableAfterPurchase.toFixed(2)} left for year.`;
+    reason = `${monthlyMsg}\n${yearlyMsg}`;
+  }
+  // Can afford this month but tight
+  else if (afterPurchaseBalance > 0) {
+    recommendation = "buy";
+    const monthlyMsg = `🟡 Monthly: Tight. $${afterPurchaseBalance.toFixed(2)} left this month.`;
+    const yearlyMsg = canAffordFromYearlyDisposable
+      ? `✅ Yearly: Affordable from yearly disposable ($${yearlyDisposableIncome.toFixed(2)}). $${yearlyDisposableAfterPurchase.toFixed(2)} left.`
+      : `❌ Yearly: Exceeds yearly disposable by $${amountCutFromSavings.toFixed(2)}. Will cut $${amountCutFromSavings.toFixed(2)} from savings.`;
+    reason = `${monthlyMsg}\n${yearlyMsg}`;
+  }
+  // Cannot afford monthly but can from yearly disposable
+  else if (canAffordFromYearlyDisposable && yearlyDisposableAfterPurchase > yearlyDisposableIncome * 0.3) {
+    recommendation = "wait";
+    const monthlyMsg = `❌ Monthly: Exceeds budget by $${Math.abs(afterPurchaseBalance).toFixed(2)}.`;
+    const yearlyMsg = `✅ Yearly: CAN afford from yearly disposable ($${yearlyDisposableIncome.toFixed(2)}). $${yearlyDisposableAfterPurchase.toFixed(2)} left for year.`;
+    reason = `${monthlyMsg}\n${yearlyMsg}\n\n💡 Wait a month or use yearly budget if important.`;
+    alternativeSuggestions = getAlternativeSuggestions(itemName, itemPrice);
+  }
+  // Cannot afford monthly, tight on yearly
+  else if (canAffordFromYearlyDisposable) {
+    recommendation = "reconsider";
+    const monthlyMsg = `❌ Monthly: Exceeds budget by $${Math.abs(afterPurchaseBalance).toFixed(2)}.`;
+    const yearlyMsg = `🟡 Yearly: Uses most of yearly disposable ($${yearlyDisposableIncome.toFixed(2)}). Only $${yearlyDisposableAfterPurchase.toFixed(2)} left.`;
+    reason = `${monthlyMsg}\n${yearlyMsg}\n\n⚠️ Would limit flexibility. Consider alternatives.`;
+    alternativeSuggestions = getAlternativeSuggestions(itemName, itemPrice);
+  }
+  // Exceeds yearly disposable - cuts into savings
+  else {
+    recommendation = "reconsider";
+    const monthlyMsg = `❌ Monthly: Exceeds budget by $${Math.abs(afterPurchaseBalance).toFixed(2)}.`;
+    const yearlyMsg = `❌ Yearly: Exceeds yearly disposable ($${yearlyDisposableIncome.toFixed(2)}) by $${amountCutFromSavings.toFixed(2)}. Will cut $${amountCutFromSavings.toFixed(2)} from savings.`;
+    reason = `${monthlyMsg}\n${yearlyMsg}\n\n🚫 Would impact savings goal. Try alternatives.`;
+    alternativeSuggestions = getAlternativeSuggestions(itemName, itemPrice);
+  }
+
+    return NextResponse.json({
+      recommendation,
+      reason,
+      itemName,
+      itemPrice,
+      impactOnSavings,
+      remainingBudget,
+      afterPurchaseBalance,
+      alternativeSuggestions: alternativeSuggestions.slice(0, 3), // Top 3 alternatives
+    });
+  } catch (error) {
+    console.error("Error in POST /api/purchase-advisor:", error);
+    if (error instanceof jwt.JsonWebTokenError) {
+      return NextResponse.json({ error: "Invalid or expired token" }, { status: 401 });
+    }
+    return NextResponse.json(
+      { error: "Internal server error", details: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
+  }
+}

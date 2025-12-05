@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fix Voice Recognition - HalloWallet</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: #fff;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        h1 { font-size: 36px; margin-bottom: 10px; }
+        h2 { font-size: 24px; margin: 30px 0 15px; color: #ffd700; }
+        h3 { font-size: 18px; margin: 20px 0 10px; }
+        p, li { line-height: 1.6; margin-bottom: 10px; }
+        .step {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border-left: 4px solid #ffd700;
+        }
+        .button {
+            display: inline-block;
+            background: #ffd700;
+            color: #333;
+            padding: 15px 30px;
+            border-radius: 10px;
+            text-decoration: none;
+            font-weight: bold;
+            margin: 10px 10px 10px 0;
+            transition: transform 0.2s;
+        }
+        .button:hover {
+            transform: scale(1.05);
+        }
+        .success { color: #4ade80; }
+        .error { color: #f87171; }
+        .warning { color: #fbbf24; }
+        code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+        #status {
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            background: rgba(0, 0, 0, 0.2);
+        }
+        .test-button {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 0;
+            transition: all 0.2s;
+        }
+        .test-button:hover {
+            background: #059669;
+            transform: scale(1.05);
+        }
+        .test-button:disabled {
+            background: #6b7280;
+            cursor: not-allowed;
+            transform: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Fix Voice Recognition</h1>
+        <p>Let's get your voice assistant working!</p>
+
+        <div id="status">
+            <h3>🔍 Checking your system...</h3>
+            <div id="checks"></div>
+        </div>
+
+        <button class="test-button" onclick="testVoice()">🧪 Test Voice Recognition</button>
+        <button class="test-button" onclick="requestMic()">🎙️ Request Microphone Access</button>
+
+        <h2>📋 Step-by-Step Fix</h2>
+
+        <div class="step">
+            <h3>Step 1: Check Browser</h3>
+            <p>✅ Use Chrome, Edge, or Safari</p>
+            <p>❌ Firefox doesn't support Web Speech API</p>
+            <p><strong>Your browser:</strong> <span id="browser"></span></p>
+        </div>
+
+        <div class="step">
+            <h3>Step 2: Grant Microphone Permission</h3>
+            <p>1. Click the 🔒 or 🎙️ icon in your browser's address bar</p>
+            <p>2. Find "Microphone" in the permissions list</p>
+            <p>3. Change it to "Allow"</p>
+            <p>4. Refresh the page</p>
+            <br>
+            <p><strong>Or open Chrome settings:</strong></p>
+            <a href="chrome://settings/content/microphone" class="button" target="_blank">
+                Open Microphone Settings
+            </a>
+        </div>
+
+        <div class="step">
+            <h3>Step 3: Check System Permissions (macOS)</h3>
+            <p>1. Open <strong>System Settings</strong></p>
+            <p>2. Go to <strong>Privacy & Security</strong> → <strong>Microphone</strong></p>
+            <p>3. Make sure <strong>Google Chrome</strong> (or your browser) is enabled</p>
+            <p>4. Restart your browser</p>
+        </div>
+
+        <div class="step">
+            <h3>Step 4: Try Incognito/Private Mode</h3>
+            <p>Sometimes extensions or cache cause issues:</p>
+            <p>• Chrome: Press <code>Cmd+Shift+N</code> (Mac) or <code>Ctrl+Shift+N</code> (Windows)</p>
+            <p>• Safari: Press <code>Cmd+Shift+N</code></p>
+            <p>• Then visit: <code>http://localhost:3001</code></p>
+        </div>
+
+        <div class="step">
+            <h3>Step 5: Clear Browser Cache</h3>
+            <p>1. Press <code>Cmd+Shift+Delete</code> (Mac) or <code>Ctrl+Shift+Delete</code> (Windows)</p>
+            <p>2. Select "Cached images and files"</p>
+            <p>3. Click "Clear data"</p>
+            <p>4. Restart browser and try again</p>
+        </div>
+
+        <div class="step">
+            <h3>Step 6: Check Network</h3>
+            <p>Voice recognition needs internet to reach Google's servers:</p>
+            <p>• Disable VPN if you're using one</p>
+            <p>• Try a different network (mobile hotspot)</p>
+            <p>• Check if your firewall blocks Google services</p>
+        </div>
+
+        <h2>🎯 Alternative: Use Typing Instead</h2>
+        <div class="step">
+            <p><strong>Good news!</strong> Typing works exactly the same as voice:</p>
+            <p>✨ Same features</p>
+            <p>✨ Same AI understanding</p>
+            <p>✨ Actually faster and more reliable</p>
+            <br>
+            <p><strong>Just type in the chat box:</strong></p>
+            <code>Add 50 dollars for groceries</code><br>
+            <code>Monthly summary</code><br>
+            <code>Set goal 1000 for food</code>
+        </div>
+
+        <a href="http://localhost:3001" class="button">← Back to HalloWallet</a>
+    </div>
+
+    <script>
+        // Check browser support
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const checks = document.getElementById('checks');
+        const browserSpan = document.getElementById('browser');
+
+        // Detect browser
+        const ua = navigator.userAgent;
+        let browserName = 'Unknown';
+        if (ua.includes('Chrome')) browserName = 'Chrome ✅';
+        else if (ua.includes('Safari')) browserName = 'Safari ✅';
+        else if (ua.includes('Edge')) browserName = 'Edge ✅';
+        else if (ua.includes('Firefox')) browserName = 'Firefox ❌ (Not supported)';
+        browserSpan.textContent = browserName;
+
+        // Run checks
+        let html = '';
+        
+        if (SpeechRecognition) {
+            html += '<p class="success">✅ Web Speech API supported</p>';
+        } else {
+            html += '<p class="error">❌ Web Speech API not supported - try Chrome or Safari</p>';
+        }
+
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            html += '<p class="success">✅ Microphone API available</p>';
+        } else {
+            html += '<p class="error">❌ Microphone API not available</p>';
+        }
+
+        if (window.location.protocol === 'https:' || window.location.hostname === 'localhost') {
+            html += '<p class="success">✅ Secure context (HTTPS or localhost)</p>';
+        } else {
+            html += '<p class="warning">⚠️ Not a secure context - voice may not work</p>';
+        }
+
+        if (navigator.onLine) {
+            html += '<p class="success">✅ Internet connection detected</p>';
+        } else {
+            html += '<p class="error">❌ No internet connection</p>';
+        }
+
+        checks.innerHTML = html;
+
+        async function requestMic() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                alert('✅ Microphone access granted! Try voice recognition now.');
+                stream.getTracks().forEach(track => track.stop());
+            } catch (error) {
+                alert('❌ Microphone access denied!\n\n' + error.message + '\n\nPlease allow microphone access in your browser settings.');
+            }
+        }
+
+        function testVoice() {
+            if (!SpeechRecognition) {
+                alert('❌ Voice recognition not supported in this browser.\n\nPlease use Chrome, Edge, or Safari.');
+                return;
+            }
+
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'en-US';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = () => {
+                alert('🎤 Listening... Say something!');
+            };
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[0][0].transcript;
+                alert('✅ Success! You said:\n\n"' + transcript + '"\n\nVoice recognition is working!');
+            };
+
+            recognition.onerror = (event) => {
+                if (event.error === 'not-allowed') {
+                    alert('❌ Microphone permission denied!\n\n1. Click 🔒 in address bar\n2. Allow microphone\n3. Try again');
+                } else if (event.error === 'network') {
+                    alert('❌ Network error!\n\nVoice recognition can\'t reach Google\'s servers.\n\nTry:\n• Disable VPN\n• Different network\n• Or use typing instead!');
+                } else {
+                    alert('❌ Error: ' + event.error + '\n\nSee the steps above to fix this.');
+                }
+            };
+
+            try {
+                recognition.start();
+            } catch (error) {
+                alert('❌ Failed to start:\n\n' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,330 @@
+// src/app/api/assistant/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUser } from "../../../lib/auth";
+import { db } from "../../../lib/db";
+
+/* ===================== Date helpers ===================== */
+const MS_DAY = 86_400_000;
+
+const toISOdate = (d: Date) => {
+  const z = new Date(d);
+  z.setHours(0, 0, 0, 0);
+  return z.toISOString().slice(0, 10);
+};
+const todayISO = () => toISOdate(new Date());
+
+const startOfMonth = (d: Date) => toISOdate(new Date(d.getFullYear(), d.getMonth(), 1));
+const endOfMonth = (d: Date) => toISOdate(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+
+const startOfWeekMon = (d: Date) => {
+  const t = new Date(d);
+  t.setHours(0, 0, 0, 0);
+  const day = t.getDay(); // 0 = Sun
+  const diff = (day + 6) % 7; // Mon=0
+  t.setDate(t.getDate() - diff);
+  return toISOdate(t);
+};
+const endOfWeekMon = (d: Date) => {
+  const s = new Date(startOfWeekMon(d));
+  s.setDate(s.getDate() + 6);
+  return toISOdate(s);
+};
+
+function addMonthsISO(iso: string, delta: number) {
+  const d = new Date(iso);
+  d.setMonth(d.getMonth() + delta);
+  return toISOdate(d);
+}
+function addDaysISO(iso: string, delta: number) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + delta);
+  return toISOdate(d);
+}
+
+/* =============== Natural language period parsing =============== */
+/** Supports:
+ *  - this|last week|month|year
+ *  - rolling windows: 7d, 30d, 90d, 6m, 12m, 2y, “past 6 months”, “last 90 days”
+ *  - “whole year”, “entire year”
+ */
+type Range = { start: string; end: string };
+
+function parseRolling(q: string): { unit: "d"|"w"|"m"|"y"; n: number } | null {
+  const s = q.toLowerCase();
+  //  e.g., "6m", "12m", "90d", "2y"
+  const short = s.match(/\b(\d+)\s*(d|day|days|w|week|weeks|m|mo|month|months|y|yr|year|years)\b/);
+  if (short) {
+    const n = parseInt(short[1], 10);
+    const u = short[2][0]; // d/w/m/y
+    return { unit: u as any, n };
+  }
+  // “past 6 months”, “last 90 days”
+  const long = s.match(/\b(past|last)\s+(\d+)\s+(days?|weeks?|months?|years?)\b/);
+  if (long) {
+    const n = parseInt(long[2], 10);
+    const u = long[3][0]; // d/w/m/y
+    return { unit: u as any, n };
+  }
+  return null;
+}
+
+function parseNamed(q: string): "this-week"|"last-week"|"this-month"|"last-month"|"this-year"|"last-year"|"whole-year"|null {
+  const s = q.toLowerCase();
+  if (/\bthis\s+week\b/.test(s)) return "this-week";
+  if (/\blast\s+week\b/.test(s)) return "last-week";
+  if (/\bthis\s+month\b/.test(s)) return "this-month";
+  if (/\blast\s+month\b/.test(s)) return "last-month";
+  if (/\bthis\s+year\b/.test(s)) return "this-year";
+  if (/\blast\s+year\b/.test(s)) return "last-year";
+  if (/\b(whole|entire)\s+year\b/.test(s)) return "whole-year";
+  // Spanish hints
+  if (/\best[ea]\s+semana\b/.test(s)) return "this-week";
+  if (/\bla\s+semana\s+pasada\b/.test(s)) return "last-week";
+  if (/\best[ea]\s+mes\b/.test(s)) return "this-month";
+  if (/\bel\s+mes\s+pasado\b/.test(s)) return "last-month";
+  if (/\best[ea]\s+a(ñ|n)o\b/.test(s)) return "this-year";
+  if (/\bel\s+a(ñ|n)o\s+pasado\b/.test(s)) return "last-year";
+  if (/\b(tod[oá]|\bentero)\s+a(ñ|n)o\b/.test(s)) return "whole-year";
+  return null;
+}
+
+function resolveRange(query: string, fallbackMonthISO: string): Range {
+  const today = new Date();
+  const named = parseNamed(query);
+  const rolling = parseRolling(query);
+
+  if (named) {
+    switch (named) {
+      case "this-week":
+        return { start: startOfWeekMon(today), end: endOfWeekMon(today) };
+      case "last-week": {
+        const end = new Date(startOfWeekMon(today));
+        end.setDate(end.getDate() - 1);
+        const start = new Date(end);
+        start.setDate(start.getDate() - 6);
+        return { start: toISOdate(start), end: toISOdate(end) };
+      }
+      case "this-month":
+        return { start: startOfMonth(today), end: toISOdate(today) };
+      case "last-month": {
+        const firstThis = new Date(startOfMonth(today));
+        const lastMonthEnd = new Date(firstThis);
+        lastMonthEnd.setDate(0);
+        const lastMonthStart = new Date(lastMonthEnd);
+        lastMonthStart.setDate(1);
+        return { start: toISOdate(lastMonthStart), end: toISOdate(lastMonthEnd) };
+      }
+      case "this-year":
+        return { start: `${today.getFullYear()}-01-01`, end: toISOdate(today) };
+      case "last-year":
+      case "whole-year": {
+        const y = today.getFullYear() - (named === "last-year" ? 1 : 0);
+        return { start: `${y}-01-01`, end: `${y}-12-31` };
+      }
+    }
+  }
+
+  if (rolling) {
+    let end = toISOdate(today);
+    let start = end;
+    if (rolling.unit === "d") {
+      start = addDaysISO(end, -rolling.n + 1);
+    } else if (rolling.unit === "w") {
+      start = addDaysISO(end, -(rolling.n * 7) + 1);
+    } else if (rolling.unit === "m") {
+      const d = new Date(end);
+      d.setMonth(d.getMonth() - rolling.n);
+      d.setDate(d.getDate() + 1);
+      start = toISOdate(d);
+    } else if (rolling.unit === "y") {
+      const d = new Date(end);
+      d.setFullYear(d.getFullYear() - rolling.n);
+      d.setDate(d.getDate() + 1);
+      start = toISOdate(d);
+    }
+    // Ensure order
+    if (new Date(start) > new Date(end)) [start, end] = [end, start];
+    return { start, end };
+  }
+
+  // Default: current month → today (avoids start>end)
+  const start = startOfMonth(today);
+  const end = toISOdate(today);
+  return { start, end };
+}
+
+/* ================= Aggregation helpers ================= */
+function sliceByRange(expenses: any[], range: Range) {
+  return expenses.filter((e: any) => {
+    const d = String(e.date).slice(0, 10);
+    return d >= range.start && d <= range.end;
+  });
+}
+function dailySeries(expenses: any[], range: Range) {
+  const start = new Date(range.start);
+  const end = new Date(range.end);
+  const days = Math.max(1, Math.round((+end - +start) / MS_DAY) + 1);
+  const map = new Map<string, number>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    map.set(toISOdate(d), 0);
+  }
+  for (const e of expenses) {
+    const k = String(e.date).slice(0, 10);
+    if (map.has(k)) map.set(k, (map.get(k) || 0) + e.amount);
+  }
+  return Array.from(map.entries()).map(([date, amount]) => ({ date, amount }));
+}
+function weekdayBreakdown(expenses: any[], range: Range) {
+  const arr = Array.from({ length: 7 }, () => 0);
+  for (const e of expenses) {
+    const k = String(e.date).slice(0, 10);
+    if (k >= range.start && k <= range.end) {
+      const wd = new Date(k).getDay();
+      arr[wd] += e.amount;
+    }
+  }
+  const labels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  return arr.map((amount, i) => ({ weekday: labels[i], amount }));
+}
+function topCategories(expenses: any[]) {
+  const byCat: Record<string, number> = {};
+  for (const e of expenses) byCat[e.category] = (byCat[e.category] || 0) + e.amount;
+  const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const total = expenses.reduce((s: number, e: any) => s + e.amount, 0);
+  const top = sorted[0];
+  return { total, top, sorted };
+}
+
+/* ================= Route ================= */
+export async function POST(req: NextRequest) {
+  const user = getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = (await req.json().catch(() => ({}))) || {};
+  const query: string = String(body.query || "").trim();
+  const monthParam: string | undefined = body.month; // "YYYY-MM" if caller sends it
+  const fallbackMonthISO = monthParam || new Date().toISOString().slice(0, 7);
+
+  const allExpenses = db.listExpenses(user.id, {});          // full set
+  const monthExpenses = db.listExpenses(user.id, { month: fallbackMonthISO }); // convenience
+
+  const messages: string[] = [];
+  const effects: any[] = [];
+
+  /* ---------- CHART INTENT (supports 6M, 90D, whole year, etc.) ---------- */
+  const isChart = /\b(chart|graph|trend|plot|gráfic|grafica|grafico|visualiz)\b/i.test(query) || /^\s*\d+\s*[dwmy]\s*chart$/i.test(query);
+  if (isChart || /^chart$/i.test(query)) {
+    const range = resolveRange(query, fallbackMonthISO);
+    // optional category
+    const catMatch = query.match(/\b(on|for|en|para)\s+([a-záéíóúüñ]+)\b/i);
+    const cat = catMatch ? catMatch[2] : null;
+
+    const within = sliceByRange(allExpenses, range);
+    const filtered = cat
+      ? within.filter(
+          (e: any) =>
+            e.category.toLowerCase() === cat.toLowerCase() ||
+            e.description.toLowerCase().includes(cat.toLowerCase())
+        )
+      : within;
+
+    const series = dailySeries(filtered, range);
+    const weekday = weekdayBreakdown(filtered, range);
+    const total = filtered.reduce((s: number, e: any) => s + e.amount, 0);
+    const days = Math.max(1, Math.round((+new Date(range.end) - +new Date(range.start)) / MS_DAY) + 1);
+    const avg = total / days;
+    const peak = series.reduce((m, p) => (p.amount > m.amount ? p : m), { date: range.start, amount: 0 });
+
+    messages.push(
+      `📊 Chart${cat ? ` for ${cat}` : ""} — ${range.start} to ${range.end}\n` +
+      `Total: $${total.toFixed(2)} • Daily avg: $${avg.toFixed(2)} • Peak: ${peak.date} ($${peak.amount.toFixed(2)})`
+    );
+
+    return NextResponse.json({
+      messages,
+      chart: {
+        range,
+        category: cat || "All",
+        summary: { total, avg, peak },
+        series,                // [{date, amount}]
+        weekdayBreakdown: weekday // [{weekday, amount}]
+      }
+    });
+  }
+
+  /* ---------- “Most spent …” respects period (this week / last month / whole year) ---------- */
+  const asksMost = /\bmost\b/i.test(query) && /\b(spent|spending)\b/i.test(query);
+  if (asksMost) {
+    const range = resolveRange(query, fallbackMonthISO);
+    const within = sliceByRange(allExpenses, range);
+    if (!within.length) {
+      messages.push(`No expenses found from ${range.start} to ${range.end}.`);
+      return NextResponse.json({ messages });
+    }
+    const { total, top, sorted } = topCategories(within);
+    if (top) {
+      messages.push(
+        `💰 From ${range.start} to ${range.end}, you spent the most on ${top[0]}: ` +
+        `$${top[1].toFixed(2)} (${((top[1] / total) * 100).toFixed(1)}%)`
+      );
+      const top3 = sorted.slice(0, 3).map(([c, a], i) => `${i + 1}. ${c}: $${a.toFixed(2)}`).join("\n");
+      messages.push(`\nTop 3 Categories:\n${top3}`);
+    } else {
+      messages.push(`No categorized spending found in that range.`);
+    }
+    return NextResponse.json({ messages });
+  }
+
+  /* ---------- Monthly summary stays monthly ---------- */
+  if (/(summary|report|this month|month)\b/i.test(query)) {
+    const total = monthExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+    const byCat: Record<string, number> = {};
+    for (const e of monthExpenses) byCat[e.category] = (byCat[e.category] || 0) + e.amount;
+    const sorted = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const top = sorted[0];
+
+    messages.push(`📊 Monthly Summary for ${fallbackMonthISO}:\nTotal Spent: $${total.toFixed(2)}\nTransactions: ${monthExpenses.length}`);
+    if (top) messages.push(`💰 Most spent on: ${top[0]} ($${top[1].toFixed(2)} - ${((top[1] / total) * 100).toFixed(1)}%)`);
+    if (sorted.length) {
+      messages.push(
+        `\nBreakdown by Category:\n` +
+        sorted.map(([c, a]) => `• ${c}: $${a.toFixed(2)}`).join("\n")
+      );
+    }
+    return NextResponse.json({ messages });
+  }
+
+  /* ---------- Yearly summary if asked ---------- */
+  if (/\byear(ly)?\b/i.test(query) && /(summary|report|total)/i.test(query)) {
+    const y = new Date().getFullYear().toString();
+    const yearExpenses = allExpenses.filter((e: any) => e.date.startsWith(y));
+    const total = yearExpenses.reduce((s: number, e: any) => s + e.amount, 0);
+    const byCat: Record<string, number> = {};
+    const byMonth: Record<string, number> = {};
+    for (const e of yearExpenses) {
+      byCat[e.category] = (byCat[e.category] || 0) + e.amount;
+      const mk = e.date.slice(0, 7);
+      byMonth[mk] = (byMonth[mk] || 0) + e.amount;
+    }
+    const top = Object.entries(byCat).sort((a, b) => b[1] - a[1])[0];
+    const avgMonthly = total / Math.max(Object.keys(byMonth).length, 1);
+
+    messages.push(
+      `📊 Yearly Summary for ${y}:\nTotal Spent: $${total.toFixed(2)}\nTransactions: ${yearExpenses.length}\nAverage Monthly: $${avgMonthly.toFixed(2)}`
+    );
+    if (top) messages.push(`💰 Most spent on: ${top[0]} ($${top[1].toFixed(2)} - ${((top[1] / total) * 100).toFixed(1)}%)`);
+    const breakdown = Object.entries(byCat).sort((a, b) => b[1] - a[1]).map(([c, a]) => `• ${c}: $${a.toFixed(2)}`).join("\n");
+    if (breakdown) messages.push(`\nBreakdown by Category:\n${breakdown}`);
+    return NextResponse.json({ messages });
+  }
+
+  /* ---------- Add / Delete / Goals / Watches ----------
+     (You can keep your existing implementations here.
+      Removed for brevity since your issue was period handling.) */
+  messages.push(
+    `I can show charts like "chart 6m", "chart last week", "chart whole year", and answer "Most spent on this week?".`
+  );
+  return NextResponse.json({ messages });
+}

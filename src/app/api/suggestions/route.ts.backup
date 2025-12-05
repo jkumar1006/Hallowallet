@@ -1,0 +1,963 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUser } from "../../../lib/auth";
+import { db } from "../../../lib/db";
+import { parseMultiLanguageCommand } from "../../../lib/languagePatterns";
+import { parseCommand } from "../../../lib/commandParser";
+
+// Helper function to extract date from text
+function extractDateFromText(text: string, defaultMonth: string): { date: string; cleanedText: string } {
+  const dateMatch = text.match(/in\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s*(\d{4})?/i);
+  
+  if (dateMatch) {
+    const monthNames = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+    const monthIndex = monthNames.indexOf(dateMatch[1].toLowerCase());
+    const year = dateMatch[2] || new Date().getFullYear();
+    const date = `${year}-${String(monthIndex + 1).padStart(2, '0')}-01`;
+    const cleanedText = text.replace(/in\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s*(\d{4})?/i, '').trim();
+    return { date, cleanedText };
+  }
+  
+  // Use default month
+  return { date: defaultMonth ? `${defaultMonth}-01` : new Date().toISOString(), cleanedText: text };
+}
+
+export async function POST(req: NextRequest) {
+  const user = getCurrentUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await req.json();
+  const { query, month: requestMonth } = body;
+  const text: string = (query || "");
+  
+  // Use month from request or default to current month
+  const month = requestMonth || new Date().toISOString().slice(0, 7);
+  const expenses = db.listExpenses(user.id, { month });
+  
+  console.log("[API] Processing command:", text, "for month:", month);
+
+  const messages: string[] = [];
+  const textLower = text.toLowerCase().trim();
+  
+  // Check for delete/remove keywords anywhere in the command
+  const deleteKeywords = /(delete|remove|delte|delate|delet|dele|remov|rmove)/i;
+  const hasDeleteKeyword = deleteKeywords.test(textLower);
+  
+  // Check if it starts with delete or has delete at the end
+  const startsWithDelete = /^(delete|remove|delte|delate|delet|dele|remov|rmove)\s+/i.test(textLower);
+  const endsWithDelete = /\s+(delete|remove|delte|delate|delet|dele|remov|rmove)$/i.test(textLower);
+  
+  const isDeleteCommand = startsWithDelete || endsWithDelete;
+  
+  // If delete keyword detected, suggest proper format
+  if (hasDeleteKeyword && !startsWithDelete) {
+    // Reformat: "100 for bills delete" -> "delete 100 for bills"
+    const reformatted = text.replace(/\s+(delete|remove|delte|delate|delet|dele|remov|rmove)$/i, '');
+    messages.push(
+      `I'll delete this expense: "${reformatted}"`
+    );
+  }
+  
+  // DELETE - Handle watches, goals, and expenses
+  if (isDeleteCommand) {
+    // Check if deleting a watch
+    if (textLower.includes("watch")) {
+      console.log("[API] Delete watch command detected");
+      
+      // Parse: "delete watch for food 100" or "delete watch food 100 yearly"
+      const watchMatch = text.match(/(?:delete|remove)\s+watch\s+(?:for\s+)?(\w+)\s+\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:(monthly|yearly|this\s+year|this\s+month))?/i);
+      
+      if (watchMatch) {
+        const category = watchMatch[1];
+        const threshold = parseFloat(watchMatch[2]);
+        const periodHint = watchMatch[3];
+        
+        // Determine period
+        let period: "monthly" | "yearly" | undefined;
+        if (periodHint) {
+          if (periodHint.includes("year")) period = "yearly";
+          else if (periodHint.includes("month")) period = "monthly";
+        }
+        
+        console.log("[API] Delete watch - category:", category, "threshold:", threshold, "period:", period);
+        
+        // Find matching watch
+        const allWatches = db.listSpendingWatches(user.id);
+        const matchingWatch = allWatches.find(w => 
+          w.category.toLowerCase() === category.toLowerCase() && 
+          w.threshold === threshold &&
+          (!period || w.period === period)
+        );
+        
+        if (matchingWatch) {
+          db.deleteSpendingWatch(matchingWatch.id, user.id);
+          messages.push(
+            `✅ Deleted watch: ${matchingWatch.category} - $${matchingWatch.threshold} ${matchingWatch.period}`
+          );
+          return NextResponse.json({
+            messages,
+            effects: [{ type: "watch_deleted", id: matchingWatch.id }]
+          });
+        } else {
+          messages.push(
+            `❌ Could not find watch for ${category} at $${threshold}${period ? ' ' + period : ''}`
+          );
+          return NextResponse.json({ messages });
+        }
+      }
+      
+      messages.push("To delete a watch, use: 'delete watch [category] [amount] [monthly/yearly]'");
+      return NextResponse.json({ messages });
+    }
+    
+    // Check if deleting a goal
+    if (textLower.includes("goal")) {
+      console.log("[API] Delete goal command detected");
+      
+      // Parse: "delete goal for food 100" or "delete goal 100 monthly"
+      const goalMatch = text.match(/(?:delete|remove)\s+goal\s+(?:for\s+)?(?:(\w+)\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(\w+)?\s*(?:(weekly|monthly|yearly))?/i);
+      
+      if (goalMatch) {
+        const limit = parseFloat(goalMatch[2]);
+        const category = goalMatch[3] || goalMatch[1];
+        const period = goalMatch[4];
+        
+        console.log("[API] Delete goal - limit:", limit, "category:", category, "period:", period);
+        
+        // Find matching goal
+        const allGoals = db.listGoals(user.id);
+        const matchingGoal = allGoals.find(g => 
+          g.limit === limit &&
+          (!category || (g.category && g.category.toLowerCase() === category.toLowerCase())) &&
+          (!period || g.period === period)
+        );
+        
+        if (matchingGoal) {
+          db.deleteGoal(matchingGoal.id, user.id);
+          messages.push(
+            `✅ Deleted goal: ${matchingGoal.label}`
+          );
+          return NextResponse.json({
+            messages,
+            effects: [{ type: "goal_deleted", id: matchingGoal.id }]
+          });
+        } else {
+          messages.push(
+            `❌ Could not find goal with limit $${limit}${category ? ' for ' + category : ''}${period ? ' ' + period : ''}`
+          );
+          return NextResponse.json({ messages });
+        }
+      }
+      
+      messages.push("To delete a goal, use: 'delete goal [amount] [for category] [weekly/monthly/yearly]'");
+      return NextResponse.json({ messages });
+    }
+    
+    // DELETE EXPENSE
+    // Clean up the text - remove delete keyword from anywhere
+    let cleanText = text.replace(/^(delete|remove|delte|delate|delet|dele|remov|rmove)\s+/i, '');
+    cleanText = cleanText.replace(/\s+(delete|remove|delte|delate|delet|dele|remov|rmove)$/i, '');
+    
+    // Try patterns: "100 for bills" OR "bills 100$"
+    let deleteMatch = cleanText.match(/\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(.+)/i);
+    let amount: number | undefined;
+    let description: string | undefined;
+    
+    if (deleteMatch) {
+      // Pattern 1: "100 for bills"
+      amount = parseFloat(deleteMatch[1]);
+      description = deleteMatch[2].trim();
+    } else {
+      // Pattern 2: "bills 100$" or "clothes 10$"
+      const altMatch = cleanText.match(/(.+?)\s+\$?(\d+(?:\.\d+)?)\$?/i);
+      if (altMatch) {
+        description = altMatch[1].trim();
+        amount = parseFloat(altMatch[2]);
+      }
+    }
+    
+    if (amount && description) {
+      // Extract date if specified and clean description
+      const { date: targetDate, cleanedText } = extractDateFromText(description, month);
+      const targetMonth = targetDate.slice(0, 7);
+      description = cleanedText;
+      
+      console.log("[API] Delete request - amount:", amount, "description:", description, "month:", targetMonth);
+      
+      // Find matching expense
+      const monthExpenses = db.listExpenses(user.id, { month: targetMonth });
+      console.log("[API] Found expenses in month:", monthExpenses.length);
+      
+      // Find all expenses with matching amount
+      const matchingByAmount = monthExpenses.filter(e => e.amount === amount);
+      
+      if (matchingByAmount.length === 0) {
+        console.log("[API] No matching expense found");
+        const allExpenses = monthExpenses.map(e => 
+          `• ${e.description} - $${e.amount.toFixed(2)} (${e.category}) on ${e.date.slice(0, 10)}`
+        ).join('\n');
+        messages.push(
+          `❌ Could not find expense: $${amount} for "${description}" in ${targetMonth}.\n\nAvailable expenses in ${targetMonth}:\n${allExpenses || 'None'}`
+        );
+        return NextResponse.json({ messages });
+      }
+      
+      // If multiple with same amount, try to match description
+      let matchingExpense = matchingByAmount[0];
+      if (matchingByAmount.length > 1) {
+        const descWords = description.toLowerCase().split(' ').filter(w => w.length > 2);
+        const betterMatch = matchingByAmount.find(e => 
+          descWords.some(word => e.description.toLowerCase().includes(word) || e.category.toLowerCase().includes(word))
+        );
+        
+        if (betterMatch) {
+          matchingExpense = betterMatch;
+        } else {
+          // Multiple matches, ask user to be more specific
+          const list = matchingByAmount.map((e, i) => 
+            `${i + 1}. ${e.description} (${e.category}) - $${e.amount.toFixed(2)} on ${e.date.slice(0, 10)}`
+          ).join('\n');
+          messages.push(
+            `Found ${matchingByAmount.length} expenses with amount $${amount} in ${targetMonth}:\n${list}\n\nPlease be more specific about which one to delete.`
+          );
+          return NextResponse.json({ messages });
+        }
+      }
+      
+      db.deleteExpense(matchingExpense.id, user.id);
+      console.log("[API] Deleted expense:", matchingExpense.id);
+      messages.push(
+        `✅ Deleted: ${matchingExpense.description} – $${matchingExpense.amount.toFixed(2)} from ${targetMonth}`
+      );
+      return NextResponse.json({
+        messages,
+        effects: [{ type: "expense_deleted", id: matchingExpense.id }]
+      });
+    }
+    
+    // If no amount specified, try to delete last expense
+    if (textLower.includes("last")) {
+      const all = db.listExpenses(user.id, {});
+      const last = all[all.length - 1];
+      if (!last) {
+        messages.push("No expenses found to delete.");
+      } else {
+        db.deleteExpense(last.id, user.id);
+        messages.push(
+          `✅ Deleted last expense: ${last.description} – $${last.amount.toFixed(2)}`
+        );
+        return NextResponse.json({
+          messages,
+          effects: [{ type: "expense_deleted", id: last.id }]
+        });
+      }
+      return NextResponse.json({ messages });
+    }
+    
+    // If we get here, couldn't parse the delete command
+    messages.push("❌ Please specify amount and description. Example: 'delete 100 for bills' or 'delete bills 100'");
+    return NextResponse.json({ messages });
+  }
+  
+  // CREATE GOAL - Check this FIRST before any other parsing
+  if (textLower.includes("goal") && (textLower.includes("set") || textLower.includes("create") || textLower.includes("add"))) {
+    console.log("[API] Goal keyword detected");
+    
+    // Parse different formats:
+    // "set yearly goal 1000 for clothes"
+    // "add goal for 100 for food weekly"
+    // "create goal 500 monthly"
+    
+    let limit: number | undefined;
+    let category: string | undefined;
+    let period: string | undefined;
+    
+    // Try format 1: "set yearly goal 1000 for clothes"
+    const format1 = text.match(/(?:set|create|add)\s+(weekly|monthly|yearly)\s+goal\s+\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(.+)?/i);
+    if (format1) {
+      period = format1[1];
+      limit = parseFloat(format1[2]);
+      category = format1[3]?.trim();
+    } else {
+      // Try format 2: "add goal for 100 for food weekly" or "create goal 500 monthly"
+      const format2 = text.match(/(?:set|create|add)\s+goal\s+(?:for\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(\w+)?\s*(weekly|monthly|yearly)?/i);
+      if (format2) {
+        limit = parseFloat(format2[1]);
+        category = format2[2];
+        period = format2[3];
+      }
+    }
+    
+    console.log("[API] Goal parsed - limit:", limit, "category:", category, "period:", period);
+    
+    if (limit) {
+      // Ask for period if not specified
+      if (!period) {
+        messages.push(
+          `I can create a goal for $${limit}${category ? ' for ' + category : ''}. Please specify:\n` +
+          `• "set weekly goal ${limit}${category ? ' for ' + category : ''}"\n` +
+          `• "set monthly goal ${limit}${category ? ' for ' + category : ''}"\n` +
+          `• "set yearly goal ${limit}${category ? ' for ' + category : ''}"`
+        );
+        return NextResponse.json({ messages });
+      }
+      
+      // Use the month from URL parameter, not current date
+      let monthValue = month; // Use the month from request
+      
+      if (period === "yearly") {
+        // For yearly goals, use just the year from the selected month
+        monthValue = month.slice(0, 4);
+      } else if (period === "weekly") {
+        // For weekly goals, use the first day of the selected month
+        monthValue = month + "-01";
+      }
+      
+      const goal = db.createGoal({
+        userId: user.id,
+        label: "Stay under $" + limit + " " + period + (category ? " for " + category : ""),
+        limit,
+        month: monthValue,
+        period: period as "weekly" | "monthly" | "yearly",
+        category: category
+      });
+      
+      console.log("[API] Goal created:", goal);
+      messages.push(
+        `✅ Goal created: ${goal.label}. Check Dashboard!`
+      );
+      return NextResponse.json({ messages, effects: [{ type: "goal_created", id: goal.id }] });
+    }
+    
+    // If we couldn't parse it properly, show help
+    messages.push(
+      "To create a goal, use: 'set [weekly/monthly/yearly] goal [amount] for [category]'\n" +
+      "Example: 'set yearly goal 1000 for clothes' or 'add goal 100 for food weekly'"
+    );
+    return NextResponse.json({ messages });
+  }
+  
+  // CREATE SPENDING WATCH - Check this FIRST before any other parsing
+  if (textLower.includes("watch") || textLower.includes("alert") || textLower.includes("notify")) {
+    console.log("[API] Watch keyword detected");
+    
+    // Try to parse watch command: "watch food 500 monthly" or "create watch 500 for food yearly"
+    const watchMatch = text.match(/(?:create|set|add)?\s*(?:a\s+)?(?:watch|alert|notify)\s+(?:for\s+)?(?:(\w+)\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(\w+)?\s*(?:(monthly|yearly))?/i);
+    
+    if (watchMatch) {
+      let category: string | undefined;
+      let threshold: number | undefined;
+      let period: string | undefined;
+      
+      // Parse different formats
+      if (watchMatch[1] && !watchMatch[1].match(/^\d/) && watchMatch[1] !== "for") {
+        // Format: "watch food 500 monthly"
+        category = watchMatch[1];
+        threshold = parseFloat(watchMatch[2]);
+        period = watchMatch[4] || watchMatch[3];
+      } else {
+        // Format: "watch 500 for food" or "create watch for 500"
+        threshold = parseFloat(watchMatch[2]);
+        category = watchMatch[3] || watchMatch[1];
+        period = watchMatch[4];
+      }
+      
+      console.log("[API] Watch parsed - category:", category, "threshold:", threshold, "period:", period);
+      
+      if (threshold && category && category !== "for") {
+        // Ask for period if not specified
+        if (!period) {
+          messages.push(
+            `I can create a watch for ${category} at $${threshold}. Please specify:\n` +
+            `• "watch ${category} ${threshold} monthly"\n` +
+            `• "watch ${category} ${threshold} yearly"`
+          );
+          return NextResponse.json({ messages });
+        }
+        
+        // Use the month from URL parameter, not current date
+        let monthValue = month; // Use the month from request
+        
+        if (period === "yearly") {
+          // For yearly watches, use just the year from the selected month
+          monthValue = month.slice(0, 4);
+        }
+        
+        const watch = db.createSpendingWatch({
+          userId: user.id,
+          category,
+          threshold,
+          period: period as "monthly" | "yearly",
+          month: monthValue,
+          createdAt: new Date().toISOString()
+        });
+        
+        console.log("[API] Spending watch created:", watch);
+        messages.push(
+          `✅ Watch created: Alert when ${category} spending reaches $${threshold} ${period}. Check Insights!`
+        );
+        return NextResponse.json({ messages, effects: [{ type: "watch_created", id: watch.id }] });
+      }
+    }
+    
+    // If we couldn't parse it properly, show help
+    messages.push(
+      "To create a watch, use: 'watch [category] [amount] [monthly/yearly]'\n" +
+      "Example: 'watch food 500 monthly' or 'create watch shopping 1000 yearly'"
+    );
+    return NextResponse.json({ messages });
+  }
+  
+  // Try multi-language parsing for ADD commands
+  const parsed = parseMultiLanguageCommand(text);
+  console.log("[API] Parsed command:", parsed);
+  
+  if (parsed && parsed.type === "add_expense" && parsed.amount && parsed.description) {
+    const category = inferCategory(parsed.description);
+    
+    // Extract date from text if specified (e.g., "in may 2025")
+    const { date: expenseDate, cleanedText } = extractDateFromText(text, month);
+    const finalDescription = cleanedText.replace(/add\s+\$?\d+(?:\.\d+)?\s+(?:dollars?\s+)?(?:for\s+)?/i, '').trim() || parsed.description;
+    
+    const e = db.createExpense({
+      userId: user.id,
+      amount: parsed.amount,
+      description: finalDescription,
+      category,
+      date: expenseDate
+    });
+    console.log("[API] Expense created:", e);
+    messages.push(
+      `✅ Added: ${e.description} – $${e.amount.toFixed(2)}, Category: ${e.category}. Check Transactions!`
+    );
+    return NextResponse.json({ messages, effects: [{ type: "expense_created", id: e.id }] });
+  }
+  
+  if (parsed && parsed.type === "set_goal" && parsed.limit) {
+    const now = new Date();
+    let monthValue = now.toISOString().slice(0, 7);
+    
+    if (parsed.period === "yearly") {
+      monthValue = now.getFullYear().toString();
+    } else if (parsed.period === "weekly") {
+      monthValue = now.toISOString().slice(0, 10);
+    }
+    
+    const goal = db.createGoal({
+      userId: user.id,
+      label: "Stay under $" + parsed.limit + " " + parsed.period + (parsed.category ? " for " + parsed.category : ""),
+      limit: parsed.limit,
+      month: monthValue,
+      period: parsed.period as "weekly" | "monthly" | "yearly",
+      category: parsed.category
+    });
+    
+    console.log("[API] Goal created:", goal);
+    messages.push(
+      `✅ Goal created: ${goal.label}. Check Dashboard!`
+    );
+    return NextResponse.json({ messages, effects: [{ type: "goal_created", id: goal.id }] });
+  }
+  
+  // Create spending watch: "create watch 500 for food" or "watch food 500 monthly"
+  if (parsed && parsed.type === "set_goal" && parsed.limit && parsed.category) {
+    // If it mentions "watch" or "alert", create a spending watch instead
+    if (textLower.includes("watch") || textLower.includes("alert") || textLower.includes("notify")) {
+      const now = new Date();
+      let monthValue = now.toISOString().slice(0, 7);
+      
+      if (parsed.period === "yearly") {
+        monthValue = now.getFullYear().toString();
+      }
+      
+      const watch = db.createSpendingWatch({
+        userId: user.id,
+        category: parsed.category,
+        threshold: parsed.limit,
+        period: parsed.period as "monthly" | "yearly",
+        month: monthValue,
+        createdAt: new Date().toISOString()
+      });
+      
+      console.log("[API] Spending watch created:", watch);
+      messages.push(
+        `✅ Watch created: Alert when ${parsed.category} spending reaches $${parsed.limit} ${parsed.period}. Check Insights!`
+      );
+      return NextResponse.json({ messages, effects: [{ type: "watch_created", id: watch.id }] });
+    }
+  }
+  
+  // Add expense patterns - but NOT if it looks like a question or other command
+  // Also exclude if it looks like a delete command (even with typos), watch command, or goal command
+  const looksLikeDelete = /^(delete|remove|delte|delate|delet|dele|remov|rmove)\s+/i.test(textLower);
+  const looksLikeWatch = textLower.includes("watch") || textLower.includes("alert") || textLower.includes("notify");
+  const looksLikeGoal = textLower.includes("goal");
+  if (!looksLikeDelete && !looksLikeWatch && !looksLikeGoal && !textLower.includes("how much") && !textLower.includes("summary") && !textLower.includes("insight") && !textLower.includes("most") && !textLower.includes("set") && !textLower.includes("create")) {
+    // "add 10 dollars coffee" or "100 for bills" or "50 coffee" or "$30 for groceries"
+    const addMatch = text.match(/(?:add\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(.+)/i);
+    if (addMatch) {
+      const amount = parseFloat(addMatch[1]);
+      let description = addMatch[2].trim();
+      
+      // Remove trailing "dollars" if present
+      description = description.replace(/\s+dollars?$/i, '').trim();
+      
+      const category = inferCategory(description);
+      
+      // Extract date from text if specified (e.g., "in may 2025")
+      const { date: expenseDate, cleanedText } = extractDateFromText(text, month);
+      const finalDescription = cleanedText.replace(/(?:add\s+)?\$?\d+(?:\.\d+)?\s+(?:dollars?\s+)?(?:for\s+)?/i, '').trim() || description;
+      
+      const e = db.createExpense({
+        userId: user.id,
+        amount,
+        description: finalDescription,
+        category,
+        date: expenseDate
+      });
+      console.log("[API] Expense created:", e);
+      messages.push(
+        `✅ Added: ${e.description} – $${e.amount.toFixed(2)}, Category: ${e.category}. Check Transactions!`
+      );
+      return NextResponse.json({ messages, effects: [{ type: "expense_created", id: e.id }] });
+    }
+  }
+
+  // Create spending watch: "create watch 500 for food monthly" or "watch food 500"
+  const watchMatch = text.match(/(?:create|set|add)?\s*(?:a\s+)?watch\s+(?:for\s+)?(?:(\w+)\s+)?\$?(\d+(?:\.\d+)?)\s*(?:dollars?\s+)?(?:for\s+)?(\w+)?\s*(?:(monthly|yearly))?/i);
+  if (watchMatch || textLower.includes("watch") && /\d+/.test(text)) {
+    let category: string | undefined;
+    let threshold: number | undefined;
+    let period: string | undefined;
+    
+    if (watchMatch) {
+      // Parse: "watch food 500 monthly" or "watch 500 for food"
+      if (watchMatch[1] && !watchMatch[1].match(/^\d/)) {
+        category = watchMatch[1];
+        threshold = parseFloat(watchMatch[2]);
+        period = watchMatch[4] || watchMatch[3];
+      } else {
+        threshold = parseFloat(watchMatch[2]);
+        category = watchMatch[3] || watchMatch[1];
+        period = watchMatch[4];
+      }
+    } else {
+      // Fallback: extract from text
+      const amountMatch = text.match(/\$?(\d+(?:\.\d+)?)/);
+      const categoryMatch = text.match(/(?:for|on)\s+(\w+)/i);
+      const periodMatch = text.match(/(monthly|yearly)/i);
+      
+      if (amountMatch) threshold = parseFloat(amountMatch[1]);
+      if (categoryMatch) category = categoryMatch[1];
+      if (periodMatch) period = periodMatch[1];
+    }
+    
+    if (threshold && category) {
+      const finalPeriod = period || "monthly";
+      const now = new Date();
+      let monthValue = now.toISOString().slice(0, 7);
+      
+      if (finalPeriod === "yearly") {
+        monthValue = now.getFullYear().toString();
+      }
+      
+      const watch = db.createSpendingWatch({
+        userId: user.id,
+        category,
+        threshold,
+        period: finalPeriod as "monthly" | "yearly",
+        month: monthValue,
+        createdAt: new Date().toISOString()
+      });
+      
+      console.log("[API] Spending watch created:", watch);
+      messages.push(
+        `✅ Watch created: Alert when ${category} spending reaches $${threshold} ${finalPeriod}. Check Insights!`
+      );
+      return NextResponse.json({ messages, effects: [{ type: "watch_created", id: watch.id }] });
+    } else {
+      messages.push(
+        "To create a watch, specify: 'watch [category] [amount] [monthly/yearly]'\n" +
+        "Example: 'watch food 500 monthly' or 'create watch 1000 for shopping yearly'"
+      );
+      return NextResponse.json({ messages });
+    }
+  }
+
+  // Create goal with category: "set yearly goal 1000 for clothes"
+  const goalWithCategoryMatch = text.match(/(?:set|create)\s+(?:a\s+)?(?:(weekly|monthly|yearly)\s+)?goal\s+(?:of\s+)?\$?(\d+(?:\.\d+)?)\$?\s+(?:dollars?\s+)?(?:for|on)\s+(.+)/i);
+  if (goalWithCategoryMatch) {
+    const period = goalWithCategoryMatch[1];
+    const limit = parseFloat(goalWithCategoryMatch[2]);
+    const category = goalWithCategoryMatch[3].trim();
+    
+    console.log("[API] Goal match found - period:", period, "limit:", limit, "category:", category);
+    
+    // If no period specified, ask for clarification
+    if (!period) {
+      messages.push(
+        "I can create a goal for $" + limit + " for " + category + ". Please specify:\n" +
+        "• 'Set weekly goal " + limit + " for " + category + "'\n" +
+        "• 'Set monthly goal " + limit + " for " + category + "'\n" +
+        "• 'Set yearly goal " + limit + " for " + category + "'"
+      );
+      return NextResponse.json({ messages });
+    }
+    
+    const now = new Date();
+    let monthValue = now.toISOString().slice(0, 7);
+    
+    if (period === "yearly") {
+      monthValue = now.getFullYear().toString();
+    } else if (period === "weekly") {
+      monthValue = now.toISOString().slice(0, 10);
+    }
+    
+    const goal = db.createGoal({
+      userId: user.id,
+      label: "Stay under $" + limit + " " + period + " for " + category,
+      limit,
+      month: monthValue,
+      period: period as "weekly" | "monthly" | "yearly",
+      category: category
+    });
+    
+    console.log("[API] Goal created successfully:", goal);
+    
+    messages.push(
+      "✅ Goal created: " + goal.label + ". Check Dashboard!"
+    );
+    return NextResponse.json({ messages, effects: [{ type: "goal_created", id: goal.id }] });
+  }
+
+  // Create goal without category
+  const goalMatch = text.match(/(?:set|create)\s+(?:a\s+)?(?:(weekly|monthly|yearly)\s+)?goal\s+(?:of\s+)?\$?(\d+(?:\.\d+)?)\$?/i);
+  if (goalMatch) {
+    const period = goalMatch[1];
+    const limit = parseFloat(goalMatch[2]);
+    
+    console.log("[API] Goal match found (no category) - period:", period, "limit:", limit);
+    
+    // If no period specified, ask for clarification
+    if (!period) {
+      messages.push(
+        "I can create a goal for $" + limit + ". Please specify:\n" +
+        "• 'Set weekly goal " + limit + "'\n" +
+        "• 'Set monthly goal " + limit + "'\n" +
+        "• 'Set yearly goal " + limit + "'"
+      );
+      return NextResponse.json({ messages });
+    }
+    
+    const now = new Date();
+    let monthValue = now.toISOString().slice(0, 7);
+    
+    if (period === "yearly") {
+      monthValue = now.getFullYear().toString();
+    } else if (period === "weekly") {
+      monthValue = now.toISOString().slice(0, 10);
+    }
+    
+    const goal = db.createGoal({
+      userId: user.id,
+      label: "Stay under $" + limit + " " + period,
+      limit,
+      month: monthValue,
+      period: period as "weekly" | "monthly" | "yearly"
+    });
+    
+    console.log("[API] Goal created successfully:", goal);
+    
+    messages.push(
+      "✅ Goal created: " + goal.label + ". Check Dashboard!"
+    );
+    return NextResponse.json({ messages, effects: [{ type: "goal_created", id: goal.id }] });
+  }
+
+  // Yearly summary / Report
+  const isYearlySummary = textLower.includes("year") && (textLower.includes("summary") || textLower.includes("report") || textLower.includes("total") || textLower.includes("साल") || textLower.includes("సంవత్సర") || textLower.includes("ವರ್ಷ") || textLower.includes("വർഷ") || textLower.includes("ஆண்டு"));
+  
+  if (isYearlySummary) {
+    const allExpenses = db.listExpenses(user.id, {});
+    const currentYear = new Date().getFullYear().toString();
+    const yearExpenses = allExpenses.filter(e => e.date.startsWith(currentYear));
+    
+    const total = yearExpenses.reduce((s, e) => s + e.amount, 0);
+    const byCategory: Record<string, number> = {};
+    const byMonth: Record<string, number> = {};
+    
+    yearExpenses.forEach(e => {
+      byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+      const monthKey = e.date.slice(0, 7);
+      byMonth[monthKey] = (byMonth[monthKey] || 0) + e.amount;
+    });
+    
+    const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
+    const avgMonthly = total / Math.max(Object.keys(byMonth).length, 1);
+    
+    messages.push(
+      `📊 Yearly Summary for ${currentYear}:\n` +
+      `Total Spent: $${total.toFixed(2)}\n` +
+      `Number of Transactions: ${yearExpenses.length}\n` +
+      `Average Monthly: $${avgMonthly.toFixed(2)}`
+    );
+    
+    if (topCategory) {
+      messages.push(
+        `💰 Most spent on: ${topCategory[0]} ($${topCategory[1].toFixed(2)} - ${((topCategory[1] / total) * 100).toFixed(1)}%)`
+      );
+    }
+    
+    const categoryBreakdown = Object.entries(byCategory)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, amt]) => `  • ${cat}: $${amt.toFixed(2)}`)
+      .join('\n');
+    
+    if (categoryBreakdown) {
+      messages.push(`\nBreakdown by Category:\n${categoryBreakdown}`);
+    }
+    
+    return NextResponse.json({ messages });
+  }
+
+  // Monthly summary / Report
+  if (textLower.includes("summary") || textLower.includes("report") || textLower.includes("this month") || textLower.includes("month") || textLower.includes("महीना") || textLower.includes("నెల") || textLower.includes("ತಿಂಗಳು") || textLower.includes("മാസം") || textLower.includes("மாதம்")) {
+    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    
+    // Calculate by category
+    const byCategory: Record<string, number> = {};
+    expenses.forEach(e => {
+      byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+    });
+    
+    // Find top category
+    const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
+    
+    messages.push(
+      `📊 Monthly Summary for ${month}:\n` +
+      `Total Spent: $${total.toFixed(2)}\n` +
+      `Number of Transactions: ${expenses.length}`
+    );
+    
+    if (topCategory) {
+      messages.push(
+        `💰 Most spent on: ${topCategory[0]} ($${topCategory[1].toFixed(2)} - ${((topCategory[1] / total) * 100).toFixed(1)}%)`
+      );
+    }
+    
+    // Show breakdown by category
+    const categoryBreakdown = Object.entries(byCategory)
+      .sort((a, b) => b[1] - a[1])
+      .map(([cat, amt]) => `  • ${cat}: $${amt.toFixed(2)}`)
+      .join('\n');
+    
+    if (categoryBreakdown) {
+      messages.push(`\nBreakdown by Category:\n${categoryBreakdown}`);
+    }
+    
+    return NextResponse.json({ messages });
+  }
+
+  // Insights / Analysis
+  if (text.includes("insight") || text.includes("analysis") || text.includes("analyze")) {
+    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    const avgPerDay = total / new Date().getDate();
+    const projectedMonthEnd = avgPerDay * 30;
+    
+    messages.push(
+      `🔍 Spending Insights:\n` +
+      `Current Total: $${total.toFixed(2)}\n` +
+      `Daily Average: $${avgPerDay.toFixed(2)}\n` +
+      `Projected Month-End: ~$${projectedMonthEnd.toFixed(2)}`
+    );
+    
+    // Category insights
+    const byCategory: Record<string, number> = {};
+    expenses.forEach(e => {
+      byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+    });
+    
+    const topCategories = Object.entries(byCategory)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    
+    if (topCategories.length > 0) {
+      messages.push(
+        `\nTop Spending Categories:\n` +
+        topCategories.map(([cat, amt], i) => 
+          `${i + 1}. ${cat}: $${amt.toFixed(2)} (${((amt / total) * 100).toFixed(1)}%)`
+        ).join('\n')
+      );
+    }
+    
+    // Suggestions
+    const suggestions: string[] = [];
+    
+    if (byCategory['Food'] && byCategory['Food'] > 300) {
+      suggestions.push("💡 Food spending is high. Consider meal prepping to save money.");
+    }
+    if (byCategory['Transit'] && byCategory['Transit'] > 150) {
+      suggestions.push("💡 Transit costs are adding up. A monthly pass might be cheaper.");
+    }
+    if (byCategory['Subscriptions'] && byCategory['Subscriptions'] > 100) {
+      suggestions.push("💡 Review your subscriptions. Cancel ones you don't use.");
+    }
+    
+    if (suggestions.length > 0) {
+      messages.push(`\n${suggestions.join('\n')}`);
+    }
+    
+    return NextResponse.json({ messages });
+  }
+
+  // Most spent on / Top spending
+  if (text.includes("most") && (text.includes("spent") || text.includes("spending"))) {
+    const byCategory: Record<string, number> = {};
+    expenses.forEach(e => {
+      byCategory[e.category] = (byCategory[e.category] || 0) + e.amount;
+    });
+    
+    const topCategory = Object.entries(byCategory).sort((a, b) => b[1] - a[1])[0];
+    
+    if (topCategory) {
+      const total = expenses.reduce((s, e) => s + e.amount, 0);
+      messages.push(
+        `💰 This month, you spent the most on ${topCategory[0]}: $${topCategory[1].toFixed(2)} (${((topCategory[1] / total) * 100).toFixed(1)}% of total spending)`
+      );
+      
+      // Show top 3
+      const top3 = Object.entries(byCategory)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([cat, amt], i) => `${i + 1}. ${cat}: $${amt.toFixed(2)}`)
+        .join('\n');
+      
+      messages.push(`\nTop 3 Categories:\n${top3}`);
+    } else {
+      messages.push("No expenses recorded yet this month.");
+    }
+    
+    return NextResponse.json({ messages });
+  }
+
+  // How much did I spend on X
+  if (text.includes("how much")) {
+    const onMatch = text.match(/(?:on|for)\s+(\w+)/);
+    const key = onMatch?.[1];
+    if (key) {
+      const total = expenses
+        .filter(
+          e =>
+            e.description.toLowerCase().includes(key) ||
+            e.category.toLowerCase() === key
+        )
+        .reduce((s, e) => s + e.amount, 0);
+      
+      const count = expenses.filter(
+        e =>
+          e.description.toLowerCase().includes(key) ||
+          e.category.toLowerCase() === key
+      ).length;
+      
+      messages.push(
+        `You spent $${total.toFixed(2)} on "${key}" this month (${count} transaction${count !== 1 ? 's' : ''}).`
+      );
+      return NextResponse.json({ messages });
+    }
+  }
+
+  // Spending trends / comparison
+  if (text.includes("trend") || text.includes("compare") || text.includes("last month")) {
+    const total = expenses.reduce((s, e) => s + e.amount, 0);
+    messages.push(
+      `Current month spending: $${total.toFixed(2)}\n` +
+      `(Historical comparison coming soon!)`
+    );
+    return NextResponse.json({ messages });
+  }
+
+  // Simple suggestion rules
+  const coffee = expenses
+    .filter(e => e.description.toLowerCase().includes("coffee"))
+    .reduce((s, e) => s + e.amount, 0);
+  if (coffee > 80) {
+    messages.push(
+      `☕ I see $${coffee.toFixed(
+        2
+      )} on coffee. Consider capping it at $40 — create a goal in the Goals tab.`
+    );
+  }
+
+  const rides = expenses
+    .filter(
+      e =>
+        e.description.toLowerCase().includes("uber") ||
+        e.category === "Transit"
+    )
+    .reduce((s, e) => s + e.amount, 0);
+  if (rides > 150) {
+    messages.push(
+      `🚗 Your rides are $${rides.toFixed(
+        2
+      )}. A monthly transit/ride pass might save you money.`
+    );
+  }
+
+  if (!messages.length) {
+    messages.push(
+      `I understood: "${query}". I can:\n` +
+      `• Add expenses: "Add 20 dollars for path" or "100 for bills"\n` +
+      `• Delete expenses: "Delete 100 for bills"\n` +
+      `• Create goals: "Set yearly goal 1000 for clothes"\n` +
+      `• Delete goals: "Delete goal 1000 for clothes yearly"\n` +
+      `• Create watches: "Watch food 500 monthly"\n` +
+      `• Delete watches: "Delete watch food 500 monthly"\n` +
+      `• Show reports: "Monthly summary" or "Insights"\n` +
+      `• Answer questions: "How much on food?"`
+    );
+  }
+
+  return NextResponse.json({ messages });
+}
+
+function inferCategory(desc: string): string {
+  const d = desc.toLowerCase();
+  
+  // English
+  if (d.includes("food") || d.includes("coffee") || d.includes("lunch") || d.includes("dinner") || d.includes("breakfast")) return "Food";
+  if (d.includes("uber") || d.includes("taxi") || d.includes("bus") || d.includes("path") || d.includes("metro") || d.includes("transit")) return "Transit";
+  if (d.includes("netflix") || d.includes("spotify") || d.includes("subscription")) return "Subscriptions";
+  if (d.includes("rent") || d.includes("bill") || d.includes("electric") || d.includes("water") || d.includes("internet")) return "Bills";
+  if (d.includes("cloth") || d.includes("shirt") || d.includes("pant") || d.includes("shoe") || d.includes("dress")) return "Shopping";
+  
+  // Hindi (हिंदी)
+  if (d.includes("भोजन") || d.includes("खाना") || d.includes("खाने")) return "Food";
+  if (d.includes("यातायात") || d.includes("बस") || d.includes("टैक्सी")) return "Transit";
+  if (d.includes("बिल") || d.includes("किराया")) return "Bills";
+  if (d.includes("सदस्यता")) return "Subscriptions";
+  
+  // Telugu (తెలుగు)
+  if (d.includes("ఆహార") || d.includes("ఆహారం") || d.includes("తిండి") || d.includes("భోజనం")) return "Food";
+  if (d.includes("రవాణా") || d.includes("బస్") || d.includes("టాక్సీ")) return "Transit";
+  if (d.includes("బిల్లు") || d.includes("బిల్లులు") || d.includes("అద్దె")) return "Bills";
+  if (d.includes("సభ్యత్వ") || d.includes("సభ్యత్వాలు")) return "Subscriptions";
+  
+  // Kannada (ಕನ್ನಡ)
+  if (d.includes("ಆಹಾರ") || d.includes("ತಿನಿಸು") || d.includes("ಊಟ")) return "Food";
+  if (d.includes("ಸಾರಿಗೆ") || d.includes("ಬಸ್") || d.includes("ಟ್ಯಾಕ್ಸಿ")) return "Transit";
+  if (d.includes("ಬಿಲ್") || d.includes("ಬಾಡಿಗೆ")) return "Bills";
+  if (d.includes("ಚಂದಾದಾರಿಕೆ")) return "Subscriptions";
+  
+  // Malayalam (മലയാളം)
+  if (d.includes("ഭക്ഷണ") || d.includes("ഭക്ഷണം") || d.includes("ഭക്ഷണത്തിന്") || d.includes("ഭക്ഷണത്തിനായി")) return "Food";
+  if (d.includes("യാത്ര") || d.includes("ബസ്") || d.includes("ടാക്സി")) return "Transit";
+  if (d.includes("ബില്ല്") || d.includes("വാടക")) return "Bills";
+  if (d.includes("സബ്സ്ക്രിപ്ഷൻ")) return "Subscriptions";
+  
+  // Tamil (தமிழ்)
+  if (d.includes("உணவு") || d.includes("உணவிற்கு") || d.includes("சாப்பாடு")) return "Food";
+  if (d.includes("போக்குவரத்து") || d.includes("பஸ்") || d.includes("டாக்ஸி")) return "Transit";
+  if (d.includes("பில்") || d.includes("வாடகை")) return "Bills";
+  if (d.includes("சந்தா")) return "Subscriptions";
+  
+  return "Other";
+}

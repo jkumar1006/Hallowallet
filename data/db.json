@@ -1,0 +1,107 @@
+{
+  "users": [
+    {
+      "id": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "email": "chandrasena002@gmail.com",
+      "password": "$2a$10$YourHashedPasswordHere",
+      "name": "User",
+      "createdAt": "2025-11-10T00:00:00.000Z"
+    }
+  ],
+  "expenses": [
+    {
+      "id": "exp1",
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "amount": 60,
+      "description": "Groceries",
+      "category": "Food",
+      "date": "2025-11-10",
+      "merchant": "",
+      "notes": ""
+    },
+    {
+      "id": "exp2",
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "amount": 70,
+      "description": "Gas",
+      "category": "Transit",
+      "date": "2025-11-10",
+      "merchant": "",
+      "notes": ""
+    },
+    {
+      "id": "exp3",
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "amount": 50,
+      "description": "Restaurant",
+      "category": "Food",
+      "date": "2025-11-10",
+      "merchant": "",
+      "notes": ""
+    },
+    {
+      "id": "exp4",
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "amount": 1000,
+      "description": "Shopping",
+      "category": "Clothes",
+      "date": "2025-11-10",
+      "merchant": "",
+      "notes": ""
+    },
+    {
+      "id": "exp5",
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "amount": 20,
+      "description": "path",
+      "category": "Transit",
+      "date": "2025-11-01",
+      "merchant": "",
+      "notes": ""
+    }
+  ],
+  "goals": [
+    {
+      "id": "goal1",
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "label": "Stay under $1000 monthly for clothes",
+      "description": "Clothes",
+      "category": "Clothes",
+      "limit": 1000,
+      "period": "monthly",
+      "month": "2025-11",
+      "createdAt": "2025-11-10T00:00:00.000Z"
+    }
+  ],
+  "financialProfiles": [
+    {
+      "userId": "0b6c559f-bdda-4250-bc90-9941da7d8acc",
+      "monthlyIncome": 8000,
+      "yearlySavingsGoal": 70000,
+      "expectedMonthlyExpenses": 2000,
+      "updatedAt": "2025-11-11T00:06:48.866Z"
+    },
+    {
+      "userId": "cc249df3-02cf-46d1-bd86-9d2e93de3776",
+      "monthlyIncome": 6000,
+      "yearlySavingsGoal": 20000,
+      "expectedMonthlyExpenses": 0,
+      "updatedAt": "2025-11-18T17:06:35.486Z"
+    },
+    {
+      "userId": "2d83b394-9996-4adb-8cb2-3bbafb0fa0b5",
+      "monthlyIncome": 1600,
+      "yearlySavingsGoal": 5000,
+      "expectedMonthlyExpenses": 900,
+      "updatedAt": "2025-11-22T01:38:24.815Z"
+    },
+    {
+      "userId": "b225949f-828d-41e6-b7b8-7785c669a599",
+      "monthlyIncome": 500,
+      "yearlySavingsGoal": 1000,
+      "expectedMonthlyExpenses": 100,
+      "updatedAt": "2025-12-01T02:11:43.085Z"
+    }
+  ],
+  "spendingWatches": []
+}
